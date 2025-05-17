@@ -228,3 +228,84 @@
     )
   )
 )
+
+;; Repay an outstanding loan with interest
+(define-public (repay-loan
+    (loan-id uint)
+    (amount uint)
+  )
+  (begin
+    (asserts! (validate-loan-id loan-id) ERR-INVALID-LOAN-ID)
+    (let (
+        (loan (unwrap! (map-get? loans { loan-id: loan-id }) ERR-LOAN-NOT-FOUND))
+        (interest-owed (calculate-interest (get loan-amount loan) (get interest-rate loan)
+          (- stacks-block-height (get last-interest-calc loan))
+        ))
+        (total-owed (+ (get loan-amount loan) interest-owed))
+      )
+      (begin
+        (asserts! (is-eq (get status loan) "active") ERR-LOAN-NOT-ACTIVE)
+        (asserts! (is-eq (get borrower loan) tx-sender) ERR-NOT-AUTHORIZED)
+        (asserts! (>= amount total-owed) ERR-INVALID-AMOUNT)
+        ;; Update loan status to repaid
+        (map-set loans { loan-id: loan-id }
+          (merge loan {
+            status: "repaid",
+            last-interest-calc: stacks-block-height,
+          })
+        )
+        ;; Release collateral from platform
+        (var-set total-btc-locked
+          (- (var-get total-btc-locked) (get collateral-amount loan))
+        )
+        ;; Remove from user's active loans
+        (match (map-get? user-loans { user: tx-sender })
+          existing-loans (ok (map-set user-loans { user: tx-sender } { active-loans: (filter not-equal-loan-id (get active-loans existing-loans)) }))
+          (ok false)
+        )
+      )
+    )
+  )
+)
+
+;; Governance Functions
+
+;; Update the minimum collateral ratio
+(define-public (update-collateral-ratio (new-ratio uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (>= new-ratio u110) ERR-INVALID-AMOUNT)
+    (var-set minimum-collateral-ratio new-ratio)
+    (ok true)
+  )
+)
+
+;; Update the liquidation threshold
+(define-public (update-liquidation-threshold (new-threshold uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (>= new-threshold u110) ERR-INVALID-AMOUNT)
+    (var-set liquidation-threshold new-threshold)
+    (ok true)
+  )
+)
+
+;; Update the price feed for a supported asset
+(define-public (update-price-feed
+    (asset (string-ascii 3))
+    (new-price uint)
+  )
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (is-valid-asset asset) ERR-INVALID-ASSET)
+    (asserts! (is-valid-price new-price) ERR-INVALID-PRICE)
+    (ok (map-set collateral-prices { asset: asset } { price: new-price }))
+  )
+)
+
+;; Read-Only Functions
+
+;; Get details about a specific loan
+(define-read-only (get-loan-details (loan-id uint))
+  (map-get? loans { loan-id: loan-id })
+)
