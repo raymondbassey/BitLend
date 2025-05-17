@@ -73,3 +73,78 @@
   { asset: (string-ascii 3) }
   { price: uint }
 )
+
+;; Private Functions
+
+;; Calculate the current collateral-to-loan ratio
+(define-private (calculate-collateral-ratio
+    (collateral uint)
+    (loan uint)
+    (btc-price uint)
+  )
+  (let (
+      (collateral-value (* collateral btc-price))
+      (ratio (* (/ collateral-value loan) u100))
+    )
+    ratio
+  )
+)
+
+;; Calculate the interest accrued over a period
+(define-private (calculate-interest
+    (principal uint)
+    (rate uint)
+    (blocks uint)
+  )
+  (let (
+      (interest-per-block (/ (* principal rate) (* u100 u144))) ;; Daily interest divided by blocks per day
+      (total-interest (* interest-per-block blocks))
+    )
+    total-interest
+  )
+)
+
+;; Check if a loan needs liquidation and process if necessary
+(define-private (check-liquidation (loan-id uint))
+  (let (
+      (loan (unwrap! (map-get? loans { loan-id: loan-id }) ERR-LOAN-NOT-FOUND))
+      (btc-price (unwrap! (get price (map-get? collateral-prices { asset: "BTC" }))
+        ERR-NOT-INITIALIZED
+      ))
+      (current-ratio (calculate-collateral-ratio (get collateral-amount loan)
+        (get loan-amount loan) btc-price
+      ))
+    )
+    (if (<= current-ratio (var-get liquidation-threshold))
+      (liquidate-position loan-id)
+      (ok true)
+    )
+  )
+)
+
+;; Process liquidation for an undercollateralized loan
+(define-private (liquidate-position (loan-id uint))
+  (let (
+      (loan (unwrap! (map-get? loans { loan-id: loan-id }) ERR-LOAN-NOT-FOUND))
+      (borrower (get borrower loan))
+    )
+    (begin
+      (map-set loans { loan-id: loan-id } (merge loan { status: "liquidated" }))
+      (map-delete user-loans { user: borrower })
+      (ok true)
+    )
+  )
+)
+
+;; Validate that a loan ID exists in the system
+(define-private (validate-loan-id (loan-id uint))
+  (and
+    (> loan-id u0)
+    (<= loan-id (var-get total-loans-issued))
+  )
+)
+
+;; Check if an asset is supported by the platform
+(define-private (is-valid-asset (asset (string-ascii 3)))
+  (is-some (index-of VALID-ASSETS asset))
+)
